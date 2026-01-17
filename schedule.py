@@ -1,5 +1,6 @@
 from supabase import create_client, Client
 from flask import Flask, jsonify, request, session
+from flask_session import Session
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_cors import CORS
 from datetime import timedelta, datetime
@@ -12,6 +13,7 @@ import calendar
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import json
 import asyncio
+import jwt
 
 app_notif = FastAPI()
 
@@ -27,6 +29,12 @@ url = "https://asbfhxdomvclwsrekdxi.supabase.co"
 # key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFzYmZoeGRvbXZjbHdzcmVrZHhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQzMjI3OTUsImV4cCI6MjA2OTg5ODc5NX0.0VzbWIc-uxIDhI03g04n8HSPRQ_p01UTJQ1sg8ggigU"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFzYmZoeGRvbXZjbHdzcmVrZHhpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NDMyMjc5NSwiZXhwIjoyMDY5ODk4Nzk1fQ.iPXQg3KBXGXNlJwMzv5Novm0Qnc7Y5sPNE4RYxg3wqI"
 supabase: Client = create_client(url, key)
+app.config['SECRET_KEY'] = 'gerri-session-secret-2026'
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_PERMANENT'] = False
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
+Session(app)
+CORS(app, supports_credentials=True)
 
 
 # schedule display
@@ -711,25 +719,54 @@ def prepare_schedule():
 
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.get_json(silent=True) or {}
-    emp_id = data.get("employeeId")
-    password = data.get("password")
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data received"}), 400
+            
+        emp_id_str = data.get("employeeId")
+        password = data.get("password")
+        
+        # Convert to int safely
+        try:
+            emp_id = int(emp_id_str)
+        except:
+            return jsonify({"error": "Employee ID must be a number"}), 400
+            
+        if not emp_id or not password:
+            return jsonify({"error": "Employee ID and password required"}), 400
 
-    if not emp_id or not password:
-        return jsonify({"error": "employeeId and password are required"}), 400
+        # Fetch employee
+        response = supabase.table("employee").select("*").eq("emp_id", emp_id).execute()
+        
+        if not response.data:
+            return jsonify({"error": "Employee not found"}), 400
+            
+        employee = response.data[0]
+        
+        # PLAIN TEXT PASSWORD (matches your DB)
+        if employee["password"] != password:
+            return jsonify({"error": "Wrong password"}), 400
 
-    response = supabase.table("employee").select("password").eq("emp_id", emp_id).execute()
+        # Simple token (no JWT complexity)
+        token = f"token_{employee['emp_id']}_{employee.get('emp_role', 'WORKER')}"
+        
+        return jsonify({
+            "success": True,
+            "message": "Login OK",
+            "token": token,
+            "user": {
+                "emp_id": employee["emp_id"],
+                "emp_role": employee.get("emp_role", "WORKER"),
+                "first_name": employee["first_name"],
+                "email": employee.get("email", "")
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"Login error: {e}")
+        return jsonify({"error": str(e)}), 500
 
-    if not response.data:
-        return jsonify({"error": "Invalid credentials"}), 400
-
-    stored_pw = response.data[0]["password"]
-
-    if not check_password_hash(stored_pw, password):
-        return jsonify({"error": "Invalid credentials"}), 400
-
-    session['emp_id'] = emp_id
-    return jsonify({"message": "Login successful"}), 200
 
 
 
